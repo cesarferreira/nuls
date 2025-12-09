@@ -53,6 +53,13 @@ mod palette {
     pub const TYPE: &str = "\x1b[38;5;78m";
     pub const SIZE: &str = "\x1b[38;5;45m";
     pub const MODIFIED: &str = "\x1b[38;5;114m";
+    pub const MODIFIED_RECENT: &str = "\x1b[38;5;82m";
+    pub const MODIFIED_SOON: &str = "\x1b[38;5;148m";
+    pub const MODIFIED_HOURS: &str = "\x1b[38;5;184m";
+    pub const MODIFIED_DAYS: &str = "\x1b[38;5;208m";
+    pub const MODIFIED_WEEKS: &str = "\x1b[38;5;203m";
+    pub const MODIFIED_OLD: &str = "\x1b[38;5;244m";
+    pub const MODIFIED_FUTURE: &str = "\x1b[38;5;111m";
     pub const DIR: &str = "\x1b[38;5;45m";
     pub const FILE: &str = "\x1b[38;5;252m";
     pub const EXEC: &str = "\x1b[38;5;197m";
@@ -106,11 +113,11 @@ fn collect_entries(path: &PathBuf, include_hidden: bool) -> Result<Vec<EntryRow>
         let is_executable = is_executable(&metadata);
 
         let size = metadata.len();
-        let modified_plain = metadata
+        let (modified_plain, recency) = metadata
             .modified()
             .ok()
-            .and_then(|ts| Some(format_relative_time(ts)))
-            .unwrap_or_else(|| "unknown".to_string());
+            .map(format_relative_time)
+            .unwrap_or_else(|| ("unknown".to_string(), Recency::Unknown));
 
         let name_colored = color_name(&name, entry_type, is_executable, is_hidden);
         let type_plain = match entry_type {
@@ -125,7 +132,7 @@ fn collect_entries(path: &PathBuf, include_hidden: bool) -> Result<Vec<EntryRow>
             entry_type_colored: palette::paint(type_plain, palette::TYPE),
             size_plain: format_size(size),
             size_colored: palette::paint(format_size(size), palette::SIZE),
-            modified_colored: palette::paint(modified_plain.clone(), palette::MODIFIED),
+            modified_colored: color_modified(&modified_plain, recency),
             modified_plain,
             is_dir: entry_type == EntryType::Dir,
         });
@@ -284,7 +291,7 @@ fn format_size(size: u64) -> String {
     formatted.chars().rev().collect()
 }
 
-fn format_relative_time(ts: SystemTime) -> String {
+fn format_relative_time(ts: SystemTime) -> (String, Recency) {
     let now = SystemTime::now();
     let (past, duration) = match now.duration_since(ts) {
         Ok(dur) => (true, dur),
@@ -292,28 +299,52 @@ fn format_relative_time(ts: SystemTime) -> String {
     };
 
     let secs = duration.as_secs();
-    if secs < 5 {
-        return "just now".to_string();
-    }
-
-    let (value, unit) = if secs < 60 {
-        (secs, "second")
+    let recency = if !past {
+        Recency::Future
+    } else if secs < 5 {
+        Recency::JustNow
+    } else if secs < 60 {
+        Recency::Seconds
     } else if secs < 3_600 {
-        (secs / 60, "minute")
+        Recency::Minutes
     } else if secs < 86_400 {
-        (secs / 3_600, "hour")
+        Recency::Hours
     } else if secs < 604_800 {
-        (secs / 86_400, "day")
+        Recency::Days
+    } else if secs < 2_629_746 {
+        Recency::Weeks
+    } else if secs < 31_557_600 {
+        Recency::Months
     } else {
-        (secs / 604_800, "week")
+        Recency::Years
     };
 
-    let plural = if value == 1 { "" } else { "s" };
-    if past {
-        format!("{value} {unit}{plural} ago")
-    } else {
+    let text = if recency == Recency::JustNow {
+        "just now".to_string()
+    } else if !past {
+        let (value, unit) = match secs {
+            s if s < 60 => (s, "second"),
+            s if s < 3_600 => (s / 60, "minute"),
+            s if s < 86_400 => (s / 3_600, "hour"),
+            s if s < 604_800 => (s / 86_400, "day"),
+            s => (s / 604_800, "week"),
+        };
+        let plural = if value == 1 { "" } else { "s" };
         format!("in {value} {unit}{plural}")
-    }
+    } else {
+        let (value, unit) = match secs {
+            s if s < 60 => (s, "second"),
+            s if s < 3_600 => (s / 60, "minute"),
+            s if s < 86_400 => (s / 3_600, "hour"),
+            s if s < 604_800 => (s / 86_400, "day"),
+            s if s < 2_629_746 => (s / 604_800, "week"),
+            s if s < 31_557_600 => (s / 2_629_746, "month"),
+            s => (s / 31_557_600, "year"),
+        };
+        let plural = if value == 1 { "" } else { "s" };
+        format!("{value} {unit}{plural} ago")
+    };
+    (text, recency)
 }
 
 fn color_name(name: &str, entry_type: EntryType, is_executable: bool, is_hidden: bool) -> String {
@@ -331,6 +362,35 @@ fn color_name(name: &str, entry_type: EntryType, is_executable: bool, is_hidden:
             }
         }
     }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Recency {
+    JustNow,
+    Seconds,
+    Minutes,
+    Hours,
+    Days,
+    Weeks,
+    Months,
+    Years,
+    Future,
+    Unknown,
+}
+
+fn color_modified(text: &str, recency: Recency) -> String {
+    let color = match recency {
+        Recency::JustNow | Recency::Seconds => palette::MODIFIED_RECENT,
+        Recency::Minutes => palette::MODIFIED_SOON,
+        Recency::Hours => palette::MODIFIED,
+        Recency::Days => palette::MODIFIED_HOURS,
+        Recency::Weeks => palette::MODIFIED_DAYS,
+        Recency::Months => palette::MODIFIED_WEEKS,
+        Recency::Years => palette::MODIFIED_OLD,
+        Recency::Future => palette::MODIFIED_FUTURE,
+        Recency::Unknown => palette::MODIFIED,
+    };
+    palette::paint(text, color)
 }
 
 #[cfg(unix)]
