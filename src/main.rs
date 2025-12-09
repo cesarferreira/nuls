@@ -159,29 +159,31 @@ fn collect_entries(
         });
     }
 
-    rows.sort_by(|a, b| {
-        match (a.is_dir, b.is_dir) {
-            (true, false) => Ordering::Less,
-            (false, true) => Ordering::Greater,
-            _ => {
-                let cmp = if sort_modified {
-                    compare_modified(b.modified_time, a.modified_time)
-                        .then_with(|| a.name_plain.to_lowercase().cmp(&b.name_plain.to_lowercase()))
-                } else {
-                    a.name_plain.to_lowercase().cmp(&b.name_plain.to_lowercase())
-                };
-                if reverse { cmp.reverse() } else { cmp }
-            }
-        }
-    });
+    sort_rows(&mut rows, sort_modified, reverse);
 
     Ok(rows)
 }
 
-fn compare_modified(a: Option<SystemTime>, b: Option<SystemTime>) -> Ordering {
+fn sort_rows(rows: &mut [EntryRow], sort_modified: bool, reverse: bool) {
+    rows.sort_by(|a, b| {
+        let cmp = if sort_modified {
+            compare_modified_desc(&a.modified_time, &b.modified_time)
+                .then_with(|| a.name_plain.to_lowercase().cmp(&b.name_plain.to_lowercase()))
+        } else {
+            match (a.is_dir, b.is_dir) {
+                (true, false) => Ordering::Less,
+                (false, true) => Ordering::Greater,
+                _ => a.name_plain.to_lowercase().cmp(&b.name_plain.to_lowercase()),
+            }
+        };
+        if reverse { cmp.reverse() } else { cmp }
+    });
+}
+
+fn compare_modified_desc(a: &Option<SystemTime>, b: &Option<SystemTime>) -> Ordering {
     match (a, b) {
-        (Some(a), Some(b)) => a.cmp(&b),
-        (Some(_), None) => Ordering::Less,
+        (Some(a), Some(b)) => b.cmp(a), // newest first
+        (Some(_), None) => Ordering::Less, // real timestamps before unknown
         (None, Some(_)) => Ordering::Greater,
         (None, None) => Ordering::Equal,
     }
@@ -534,13 +536,12 @@ mod tests {
     #[test]
     fn compare_modified_orders_newest_first_logic() {
         let now = SystemTime::now();
-        let older = now - Duration::from_secs(10);
-        let newer = now - Duration::from_secs(1);
-        // compare_modified expects arguments as (a, b) and returns ordering relative
-        assert_eq!(compare_modified(Some(newer), Some(older)), Ordering::Greater);
-        assert_eq!(compare_modified(Some(older), Some(newer)), Ordering::Less);
-        assert_eq!(compare_modified(Some(now), None), Ordering::Less);
-        assert_eq!(compare_modified(None, Some(now)), Ordering::Greater);
+        let older = Some(now - Duration::from_secs(10));
+        let newer = Some(now - Duration::from_secs(1));
+        assert_eq!(compare_modified_desc(&newer, &older), Ordering::Less);
+        assert_eq!(compare_modified_desc(&older, &newer), Ordering::Greater);
+        assert_eq!(compare_modified_desc(&Some(now), &None), Ordering::Less);
+        assert_eq!(compare_modified_desc(&None, &Some(now)), Ordering::Greater);
     }
 
     #[test]
@@ -550,5 +551,86 @@ mod tests {
         assert!(dot.contains(".env"));
         let exe = color_name("run.sh", EntryType::File, true, false);
         assert!(exe.contains("run.sh"));
+    }
+
+    #[test]
+    fn sort_rows_respects_modified_over_directory_priority() {
+        let now = SystemTime::now();
+        let mut rows = vec![
+            EntryRow {
+                name_plain: "old_dir".into(),
+                name_colored: String::new(),
+                entry_type_plain: "dir".into(),
+                entry_type_colored: String::new(),
+                size_plain: String::new(),
+                size_colored: String::new(),
+                modified_plain: String::new(),
+                modified_colored: String::new(),
+                modified_time: Some(now - Duration::from_secs(120)),
+                is_dir: true,
+            },
+            EntryRow {
+                name_plain: "new_file".into(),
+                name_colored: String::new(),
+                entry_type_plain: "file".into(),
+                entry_type_colored: String::new(),
+                size_plain: String::new(),
+                size_colored: String::new(),
+                modified_plain: String::new(),
+                modified_colored: String::new(),
+                modified_time: Some(now - Duration::from_secs(10)),
+                is_dir: false,
+            },
+            EntryRow {
+                name_plain: "mid_file".into(),
+                name_colored: String::new(),
+                entry_type_plain: "file".into(),
+                entry_type_colored: String::new(),
+                size_plain: String::new(),
+                size_colored: String::new(),
+                modified_plain: String::new(),
+                modified_colored: String::new(),
+                modified_time: Some(now - Duration::from_secs(60)),
+                is_dir: false,
+            },
+        ];
+        sort_rows(&mut rows, true, false);
+        assert_eq!(rows[0].name_plain, "new_file");
+        assert_eq!(rows[1].name_plain, "mid_file");
+        assert_eq!(rows[2].name_plain, "old_dir");
+    }
+
+    #[test]
+    fn sort_rows_reverse_applies_after_modified() {
+        let now = SystemTime::now();
+        let mut rows = vec![
+            EntryRow {
+                name_plain: "a".into(),
+                name_colored: String::new(),
+                entry_type_plain: "file".into(),
+                entry_type_colored: String::new(),
+                size_plain: String::new(),
+                size_colored: String::new(),
+                modified_plain: String::new(),
+                modified_colored: String::new(),
+                modified_time: Some(now - Duration::from_secs(10)),
+                is_dir: false,
+            },
+            EntryRow {
+                name_plain: "b".into(),
+                name_colored: String::new(),
+                entry_type_plain: "file".into(),
+                entry_type_colored: String::new(),
+                size_plain: String::new(),
+                size_colored: String::new(),
+                modified_plain: String::new(),
+                modified_colored: String::new(),
+                modified_time: Some(now - Duration::from_secs(5)),
+                is_dir: false,
+            },
+        ];
+        sort_rows(&mut rows, true, true);
+        assert_eq!(rows[0].name_plain, "a"); // oldest first when reversed
+        assert_eq!(rows[1].name_plain, "b");
     }
 }
