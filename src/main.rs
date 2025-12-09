@@ -1,11 +1,18 @@
-use clap::{ArgAction, Parser};
+use clap::builder::styling::{AnsiColor, Color, Style, Styles};
+use clap::{ArgAction, ColorChoice, Parser};
 use std::cmp::Ordering;
 use std::fs;
 use std::path::PathBuf;
 use std::time::SystemTime;
 
 #[derive(Parser, Debug)]
-#[command(author, version, about = "A NuShell-inspired ls with color.")]
+#[command(
+    author,
+    version,
+    about = "A NuShell-inspired ls with color.",
+    color = ColorChoice::Always,
+    styles = help_styles()
+)]
 struct Cli {
     /// Path to list
     #[arg(default_value = ".")]
@@ -22,6 +29,10 @@ struct Cli {
     /// Sort by modified time (newest first), like ls -t
     #[arg(short = 't', long = "sort-modified", action = ArgAction::SetTrue, default_value_t = false)]
     sort_modified: bool,
+
+    /// Reverse sort order (like ls -r)
+    #[arg(short = 'r', long = "reverse", action = ArgAction::SetTrue, default_value_t = false)]
+    reverse: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -86,12 +97,17 @@ fn main() {
 
 fn run(cli: Cli) -> Result<(), String> {
     let path = cli.path;
-    let entries = collect_entries(&path, cli.include_hidden, cli.sort_modified)?;
+    let entries = collect_entries(&path, cli.include_hidden, cli.sort_modified, cli.reverse)?;
     render_table(entries);
     Ok(())
 }
 
-fn collect_entries(path: &PathBuf, include_hidden: bool, sort_modified: bool) -> Result<Vec<EntryRow>, String> {
+fn collect_entries(
+    path: &PathBuf,
+    include_hidden: bool,
+    sort_modified: bool,
+    reverse: bool,
+) -> Result<Vec<EntryRow>, String> {
     let mut rows = Vec::new();
     let dir_reader = fs::read_dir(path).map_err(|err| format!("cannot read {}: {err}", path.display()))?;
 
@@ -148,12 +164,13 @@ fn collect_entries(path: &PathBuf, include_hidden: bool, sort_modified: bool) ->
             (true, false) => Ordering::Less,
             (false, true) => Ordering::Greater,
             _ => {
-                if sort_modified {
+                let cmp = if sort_modified {
                     compare_modified(b.modified_time, a.modified_time)
                         .then_with(|| a.name_plain.to_lowercase().cmp(&b.name_plain.to_lowercase()))
                 } else {
                     a.name_plain.to_lowercase().cmp(&b.name_plain.to_lowercase())
-                }
+                };
+                if reverse { cmp.reverse() } else { cmp }
             }
         }
     });
@@ -439,4 +456,99 @@ fn is_executable(metadata: &fs::Metadata) -> bool {
 #[cfg(not(unix))]
 fn is_executable(_metadata: &fs::Metadata) -> bool {
     false
+}
+
+fn help_styles() -> Styles {
+    Styles::styled()
+        .header(Style::new().fg_color(Some(Color::Ansi(AnsiColor::Green))).bold())
+        .usage(Style::new().fg_color(Some(Color::Ansi(AnsiColor::Cyan))).bold())
+        .literal(Style::new().fg_color(Some(Color::Ansi(AnsiColor::Blue))))
+        .placeholder(Style::new().fg_color(Some(Color::Ansi(AnsiColor::Yellow))))
+        .valid(Style::new().fg_color(Some(Color::Ansi(AnsiColor::Green))))
+        .invalid(Style::new().fg_color(Some(Color::Ansi(AnsiColor::Red))).bold())
+        .error(Style::new().fg_color(Some(Color::Ansi(AnsiColor::Red))).bold())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+
+    #[test]
+    fn size_formats_human_readable() {
+        assert_eq!(format_size(512), "512 B");
+        assert_eq!(format_size(1024), "1.0 KB");
+        assert_eq!(format_size(1536), "1.5 KB");
+        assert_eq!(format_size(12 * 1024 * 1024), "12 MB");
+    }
+
+    #[test]
+    fn relative_time_buckets_future_and_past() {
+        let now = SystemTime::now();
+        let (text_now, bucket_now) = format_relative_time(now - Duration::from_secs(3));
+        assert_eq!(bucket_now, Recency::JustNow);
+        assert_eq!(text_now, "just now");
+
+        let (text_future, bucket_future) = format_relative_time(now + Duration::from_secs(90));
+        assert_eq!(bucket_future, Recency::Future);
+        assert!(text_future.starts_with("in "));
+
+        let (text_hours, bucket_hours) = format_relative_time(now - Duration::from_secs(3_600));
+        assert_eq!(bucket_hours, Recency::Hours);
+        assert!(text_hours.ends_with("ago"));
+    }
+
+    #[test]
+    fn relative_time_months_and_years() {
+        let now = SystemTime::now();
+        let (_, bucket_months) = format_relative_time(now - Duration::from_secs(40 * 86_400));
+        assert_eq!(bucket_months, Recency::Months);
+
+        let (_, bucket_years) = format_relative_time(now - Duration::from_secs(370 * 86_400));
+        assert_eq!(bucket_years, Recency::Years);
+    }
+
+    #[test]
+    fn modified_color_matches_recency() {
+        let colored = color_modified("value", Recency::Years);
+        assert!(colored.starts_with(palette::MODIFIED_OLD));
+        assert!(colored.ends_with(palette::RESET));
+    }
+
+    #[test]
+    fn cli_flags_parse() {
+        let cli = Cli::try_parse_from(["nuls", "-atr", "/tmp"]).expect("parse ok");
+        assert!(cli.include_hidden);
+        assert!(cli.sort_modified);
+        assert!(cli.reverse);
+        assert_eq!(cli.path, PathBuf::from("/tmp"));
+    }
+
+    #[test]
+    fn size_formats_larger_units() {
+        assert_eq!(format_size(5 * 1024 * 1024 * 1024), "5.0 GB");
+        assert_eq!(format_size(1_200), "1.2 KB");
+        assert_eq!(format_size(1_200_000), "1.1 MB");
+    }
+
+    #[test]
+    fn compare_modified_orders_newest_first_logic() {
+        let now = SystemTime::now();
+        let older = now - Duration::from_secs(10);
+        let newer = now - Duration::from_secs(1);
+        // compare_modified expects arguments as (a, b) and returns ordering relative
+        assert_eq!(compare_modified(Some(newer), Some(older)), Ordering::Greater);
+        assert_eq!(compare_modified(Some(older), Some(newer)), Ordering::Less);
+        assert_eq!(compare_modified(Some(now), None), Ordering::Less);
+        assert_eq!(compare_modified(None, Some(now)), Ordering::Greater);
+    }
+
+    #[test]
+    fn color_name_labels_types() {
+        assert!(color_name("dir", EntryType::Dir, false, false).contains("dir"));
+        let dot = color_name(".env", EntryType::File, false, true);
+        assert!(dot.contains(".env"));
+        let exe = color_name("run.sh", EntryType::File, true, false);
+        assert!(exe.contains("run.sh"));
+    }
 }
