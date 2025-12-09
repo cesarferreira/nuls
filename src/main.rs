@@ -171,8 +171,7 @@ fn render_table(rows: Vec<EntryRow>) {
 
     let widths = [index_width, name_width, type_width, size_width, modified_width];
 
-    let border_line = horizontal_border(&widths);
-    println!("{}", border_line);
+    println!("{}", horizontal_border(&widths, BorderKind::Top));
     let header_cells = vec![
         ("#".to_string(), palette::paint("#", palette::INDEX), Align::Right),
         (
@@ -197,7 +196,7 @@ fn render_table(rows: Vec<EntryRow>) {
         ),
     ];
     println!("{}", render_row(&header_cells, &widths));
-    println!("{}", border_line);
+    println!("{}", horizontal_border(&widths, BorderKind::Middle));
 
     for (idx, row) in rows.iter().enumerate() {
         let idx_plain = idx.to_string();
@@ -223,28 +222,44 @@ fn render_table(rows: Vec<EntryRow>) {
         );
     }
 
-    println!("{}", border_line);
+    println!("{}", horizontal_border(&widths, BorderKind::Bottom));
 }
 
-fn horizontal_border(widths: &[usize]) -> String {
+enum BorderKind {
+    Top,
+    Middle,
+    Bottom,
+}
+
+fn horizontal_border(widths: &[usize], kind: BorderKind) -> String {
+    let (start, sep, end) = match kind {
+        BorderKind::Top => ('┌', '┬', '┐'),
+        BorderKind::Middle => ('├', '┼', '┤'),
+        BorderKind::Bottom => ('└', '┴', '┘'),
+    };
+
     let mut line = String::new();
-    line.push('+');
-    for width in widths {
-        line.push_str(&"-".repeat(width + 2));
-        line.push('+');
+    line.push(start);
+    for (idx, width) in widths.iter().enumerate() {
+        line.push_str(&"─".repeat(width + 2));
+        if idx + 1 == widths.len() {
+            line.push(end);
+        } else {
+            line.push(sep);
+        }
     }
     palette::paint(line, palette::BORDER)
 }
 
 fn render_row(columns: &[(String, String, Align)], widths: &[usize]) -> String {
     let mut line = String::new();
-    line.push_str(&palette::paint("|", palette::BORDER));
+    line.push_str(&palette::paint("│", palette::BORDER));
     for ((plain, colored, align), width) in columns.iter().zip(widths.iter()) {
         let padded = pad_cell(colored, plain, *width, *align);
         line.push(' ');
         line.push_str(&padded);
         line.push(' ');
-        line.push_str(&palette::paint("|", palette::BORDER));
+        line.push_str(&palette::paint("│", palette::BORDER));
     }
     line
 }
