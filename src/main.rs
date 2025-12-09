@@ -280,15 +280,31 @@ fn pad_cell(colored: &str, plain: &str, width: usize, align: Align) -> String {
 }
 
 fn format_size(size: u64) -> String {
-    let digits: Vec<char> = size.to_string().chars().rev().collect();
-    let mut formatted = String::new();
-    for (idx, ch) in digits.iter().enumerate() {
-        if idx > 0 && idx % 3 == 0 {
-            formatted.push(',');
+    const UNITS: &[(&str, u64)] = &[
+        ("B", 1),
+        ("KB", 1024),
+        ("MB", 1024 * 1024),
+        ("GB", 1024 * 1024 * 1024),
+        ("TB", 1024 * 1024 * 1024 * 1024),
+    ];
+
+    let mut unit = UNITS[0];
+    for candidate in UNITS {
+        if size >= candidate.1 {
+            unit = *candidate;
+        } else {
+            break;
         }
-        formatted.push(*ch);
     }
-    formatted.chars().rev().collect()
+
+    let value = size as f64 / unit.1 as f64;
+    let text = if value < 10.0 && unit.0 != "B" {
+        format!("{value:.1}")
+    } else {
+        format!("{value:.0}")
+    };
+
+    format!("{text} {}", unit.0)
 }
 
 fn format_relative_time(ts: SystemTime) -> (String, Recency) {
