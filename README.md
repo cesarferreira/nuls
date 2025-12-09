@@ -1,5 +1,9 @@
 # nuls
 
+![Crates.io](https://img.shields.io/crates/v/nuls)
+![License](https://img.shields.io/crates/l/nuls)
+![Tests](https://img.shields.io/badge/tests-pass-brightgreen)
+
 > _Screenshot goes here_
 
 NuShell-inspired `ls` with a colorful, table-based layout: directory/file type tagging, human-readable sizes, relative “modified” times with recency-driven colors, and familiar flags.
@@ -13,6 +17,12 @@ NuShell-inspired `ls` with a colorful, table-based layout: directory/file type t
 - Colored help output for quick scanning
 
 ## Install
+From crates.io:
+```bash
+cargo install nuls
+```
+
+Building locally:
 ```bash
 cargo install --path . --bin nuls --force
 # optional: cargo install --path . --bin nuls --force --root ~/.local
