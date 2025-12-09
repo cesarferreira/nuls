@@ -18,6 +18,10 @@ struct Cli {
     /// Long listing output (accepted for familiarity; same as default output)
     #[arg(short = 'l', long = "long", action = ArgAction::SetTrue, default_value_t = false)]
     _long: bool,
+
+    /// Sort by modified time (newest first), like ls -t
+    #[arg(short = 't', long = "sort-modified", action = ArgAction::SetTrue, default_value_t = false)]
+    sort_modified: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -36,6 +40,7 @@ struct EntryRow {
     size_colored: String,
     modified_plain: String,
     modified_colored: String,
+    modified_time: Option<SystemTime>,
     is_dir: bool,
 }
 
@@ -81,12 +86,12 @@ fn main() {
 
 fn run(cli: Cli) -> Result<(), String> {
     let path = cli.path;
-    let entries = collect_entries(&path, cli.include_hidden)?;
+    let entries = collect_entries(&path, cli.include_hidden, cli.sort_modified)?;
     render_table(entries);
     Ok(())
 }
 
-fn collect_entries(path: &PathBuf, include_hidden: bool) -> Result<Vec<EntryRow>, String> {
+fn collect_entries(path: &PathBuf, include_hidden: bool, sort_modified: bool) -> Result<Vec<EntryRow>, String> {
     let mut rows = Vec::new();
     let dir_reader = fs::read_dir(path).map_err(|err| format!("cannot read {}: {err}", path.display()))?;
 
@@ -113,9 +118,8 @@ fn collect_entries(path: &PathBuf, include_hidden: bool) -> Result<Vec<EntryRow>
         let is_executable = is_executable(&metadata);
 
         let size = metadata.len();
-        let (modified_plain, recency) = metadata
-            .modified()
-            .ok()
+        let modified_time = metadata.modified().ok();
+        let (modified_plain, recency) = modified_time
             .map(format_relative_time)
             .unwrap_or_else(|| ("unknown".to_string(), Recency::Unknown));
 
@@ -134,6 +138,7 @@ fn collect_entries(path: &PathBuf, include_hidden: bool) -> Result<Vec<EntryRow>
             size_colored: palette::paint(format_size(size), palette::SIZE),
             modified_colored: color_modified(&modified_plain, recency),
             modified_plain,
+            modified_time,
             is_dir: entry_type == EntryType::Dir,
         });
     }
@@ -142,11 +147,27 @@ fn collect_entries(path: &PathBuf, include_hidden: bool) -> Result<Vec<EntryRow>
         match (a.is_dir, b.is_dir) {
             (true, false) => Ordering::Less,
             (false, true) => Ordering::Greater,
-            _ => a.name_plain.to_lowercase().cmp(&b.name_plain.to_lowercase()),
+            _ => {
+                if sort_modified {
+                    compare_modified(b.modified_time, a.modified_time)
+                        .then_with(|| a.name_plain.to_lowercase().cmp(&b.name_plain.to_lowercase()))
+                } else {
+                    a.name_plain.to_lowercase().cmp(&b.name_plain.to_lowercase())
+                }
+            }
         }
     });
 
     Ok(rows)
+}
+
+fn compare_modified(a: Option<SystemTime>, b: Option<SystemTime>) -> Ordering {
+    match (a, b) {
+        (Some(a), Some(b)) => a.cmp(&b),
+        (Some(_), None) => Ordering::Less,
+        (None, Some(_)) => Ordering::Greater,
+        (None, None) => Ordering::Equal,
+    }
 }
 
 fn render_table(rows: Vec<EntryRow>) {
