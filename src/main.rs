@@ -1,8 +1,10 @@
 use clap::builder::styling::{AnsiColor, Color, Style, Styles};
 use clap::{ArgAction, ColorChoice, Parser};
 use std::cmp::Ordering;
+use std::collections::HashMap;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::time::SystemTime;
 
 #[derive(Parser, Debug)]
@@ -33,6 +35,10 @@ struct Cli {
     /// Reverse sort order (like ls -r)
     #[arg(short = 'r', long = "reverse", action = ArgAction::SetTrue, default_value_t = false)]
     reverse: bool,
+
+    /// Show git status (+added/-deleted) if inside a git repo
+    #[arg(short = 'g', long = "git", action = ArgAction::SetTrue, default_value_t = false)]
+    git: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -44,7 +50,6 @@ enum EntryType {
 #[derive(Debug)]
 struct EntryRow {
     name_plain: String,
-    name_colored: String,
     entry_type_plain: String,
     entry_type_colored: String,
     size_plain: String,
@@ -52,6 +57,8 @@ struct EntryRow {
     modified_plain: String,
     modified_colored: String,
     modified_time: Option<SystemTime>,
+    name_with_git_colored: String,
+    name_with_git_plain: String,
     is_dir: bool,
 }
 
@@ -81,10 +88,27 @@ mod palette {
     pub const EXEC: &str = "\x1b[38;5;197m";
     pub const DOTFILE: &str = "\x1b[38;5;179m";
     pub const WARN: &str = "\x1b[38;5;214m";
+    pub const GIT_DIRTY: &str = "\x1b[38;5;214m";
+    pub const GIT_ADDED: &str = "\x1b[38;5;77m";
+    pub const GIT_REMOVED: &str = "\x1b[38;5;203m";
+    pub const GIT_CLEAN: &str = "\x1b[38;5;240m";
 
     pub fn paint(text: impl AsRef<str>, color: &str) -> String {
         format!("{}{}{}", color, text.as_ref(), RESET)
     }
+}
+
+#[derive(Debug)]
+struct GitInfo {
+    entries: HashMap<String, GitStatus>,
+}
+
+#[derive(Debug, Clone)]
+struct GitStatus {
+    added: Option<u64>,
+    deleted: Option<u64>,
+    dirty: bool,
+    untracked: bool,
 }
 
 fn main() {
@@ -97,7 +121,14 @@ fn main() {
 
 fn run(cli: Cli) -> Result<(), String> {
     let path = cli.path;
-    let entries = collect_entries(&path, cli.include_hidden, cli.sort_modified, cli.reverse)?;
+    let git_info = if cli.git { load_git_info(&path) } else { Ok(None) }?;
+    let entries = collect_entries(
+        &path,
+        cli.include_hidden,
+        cli.sort_modified,
+        cli.reverse,
+        git_info,
+    )?;
     render_table(entries);
     Ok(())
 }
@@ -107,6 +138,7 @@ fn collect_entries(
     include_hidden: bool,
     sort_modified: bool,
     reverse: bool,
+    git_info: Option<GitInfo>,
 ) -> Result<Vec<EntryRow>, String> {
     let mut rows = Vec::new();
     let dir_reader = fs::read_dir(path).map_err(|err| format!("cannot read {}: {err}", path.display()))?;
@@ -145,9 +177,25 @@ fn collect_entries(
             EntryType::File => "file".to_string(),
         };
 
+        let git_paths = git_info.as_ref().and_then(|info| info.entries.get(&name));
+        let (name_with_git_plain, name_with_git_colored) = if let Some(g) = git_paths {
+            let (plain_suffix, colored_suffix) = format_git(g).unwrap_or_default();
+            if plain_suffix.is_empty() {
+                (name.clone(), name_colored.clone())
+            } else {
+                (
+                    format!("{name} {plain_suffix}"),
+                    format!("{name_colored} {colored_suffix}"),
+                )
+            }
+        } else {
+            (name.clone(), name_colored.clone())
+        };
+
         rows.push(EntryRow {
             name_plain: name.clone(),
-            name_colored,
+            name_with_git_plain,
+            name_with_git_colored,
             entry_type_plain: type_plain.clone(),
             entry_type_colored: palette::paint(type_plain, palette::TYPE),
             size_plain: format_size(size),
@@ -168,12 +216,15 @@ fn sort_rows(rows: &mut [EntryRow], sort_modified: bool, reverse: bool) {
     rows.sort_by(|a, b| {
         let cmp = if sort_modified {
             compare_modified_desc(&a.modified_time, &b.modified_time)
-                .then_with(|| a.name_plain.to_lowercase().cmp(&b.name_plain.to_lowercase()))
+                .then_with(|| a.name_with_git_plain.to_lowercase().cmp(&b.name_with_git_plain.to_lowercase()))
         } else {
             match (a.is_dir, b.is_dir) {
                 (true, false) => Ordering::Less,
                 (false, true) => Ordering::Greater,
-                _ => a.name_plain.to_lowercase().cmp(&b.name_plain.to_lowercase()),
+                _ => a
+                    .name_with_git_plain
+                    .to_lowercase()
+                    .cmp(&b.name_with_git_plain.to_lowercase()),
             }
         };
         if reverse { cmp.reverse() } else { cmp }
@@ -189,11 +240,175 @@ fn compare_modified_desc(a: &Option<SystemTime>, b: &Option<SystemTime>) -> Orde
     }
 }
 
+fn load_git_info(list_path: &Path) -> Result<Option<GitInfo>, String> {
+    let abs_list = list_path
+        .canonicalize()
+        .map_err(|err| format!("cannot canonicalize {}: {err}", list_path.display()))?;
+
+    let root_output = Command::new("git")
+        .args(["rev-parse", "--show-toplevel"])
+        .current_dir(&abs_list)
+        .output();
+
+    let Ok(output) = root_output else {
+        return Ok(None);
+    };
+    if !output.status.success() {
+        return Ok(None);
+    }
+    let git_root = PathBuf::from(
+        String::from_utf8_lossy(&output.stdout)
+            .trim()
+            .to_string(),
+    );
+
+    if !abs_list.starts_with(&git_root) {
+        return Ok(None);
+    }
+
+    let mut status_map = read_git_status(&git_root)?;
+    merge_numstat(&mut status_map, &git_root)?;
+    let scoped = scope_git_entries(status_map, &git_root, &abs_list);
+    Ok(Some(GitInfo { entries: scoped }))
+}
+
+fn read_git_status(git_root: &Path) -> Result<HashMap<String, GitStatus>, String> {
+    let output = Command::new("git")
+        .args(["status", "--porcelain=1"])
+        .current_dir(git_root)
+        .output()
+        .map_err(|err| format!("failed to run git status: {err}"))?;
+
+    if !output.status.success() {
+        return Err("git status failed".to_string());
+    }
+
+    let mut map = HashMap::new();
+    for line in String::from_utf8_lossy(&output.stdout).lines() {
+        if line.starts_with("!!") {
+            continue;
+        }
+        if line.len() < 3 {
+            continue;
+        }
+        let code = &line[..2];
+        let raw_path = line[3..].trim();
+        let path = if raw_path.contains(" -> ") {
+            raw_path
+                .rsplit_once(" -> ")
+                .map(|(_, new)| new.to_string())
+                .unwrap_or_else(|| raw_path.to_string())
+        } else {
+            raw_path.to_string()
+        };
+
+        let untracked = code == "??";
+        let dirty = code.trim() != "";
+        map.insert(
+            path,
+            GitStatus {
+                added: None,
+                deleted: None,
+                dirty,
+                untracked,
+            },
+        );
+    }
+    Ok(map)
+}
+
+fn merge_numstat(map: &mut HashMap<String, GitStatus>, git_root: &Path) -> Result<(), String> {
+    let output = Command::new("git")
+        .args(["diff", "--numstat", "HEAD"])
+        .current_dir(git_root)
+        .output()
+        .map_err(|err| format!("failed to run git diff: {err}"))?;
+
+    if !output.status.success() {
+        return Err("git diff failed".to_string());
+    }
+
+    for line in String::from_utf8_lossy(&output.stdout).lines() {
+        let parts: Vec<&str> = line.split('\t').collect();
+        if parts.len() < 3 {
+            continue;
+        }
+        let added = parts[0].parse::<u64>().ok();
+        let deleted = parts[1].parse::<u64>().ok();
+        let path = parts[2].to_string();
+        if added.is_none() && deleted.is_none() {
+            continue;
+        }
+        map.entry(path)
+            .and_modify(|entry| {
+                entry.added = added.or(entry.added);
+                entry.deleted = deleted.or(entry.deleted);
+                entry.dirty = true;
+            })
+            .or_insert(GitStatus {
+                added,
+                deleted,
+                dirty: true,
+                untracked: false,
+            });
+    }
+
+    Ok(())
+}
+
+fn scope_git_entries(
+    map: HashMap<String, GitStatus>,
+    git_root: &Path,
+    list_path: &Path,
+) -> HashMap<String, GitStatus> {
+    let mut scoped = HashMap::new();
+    let rel_base = list_path
+        .strip_prefix(git_root)
+        .unwrap_or(list_path)
+        .to_path_buf();
+
+    for (path_str, status) in map.into_iter() {
+        let path = Path::new(&path_str);
+        let relative = if rel_base.as_os_str().is_empty() {
+            path
+        } else if let Ok(sub) = path.strip_prefix(&rel_base) {
+            sub
+        } else {
+            continue;
+        };
+
+        if let Some(component) = relative.components().next() {
+            let key = component.as_os_str().to_string_lossy().to_string();
+            let entry = scoped.entry(key).or_insert(GitStatus {
+                added: None,
+                deleted: None,
+                dirty: false,
+                untracked: false,
+            });
+            entry.dirty |= status.dirty;
+            entry.untracked |= status.untracked;
+            entry.added = sum_opts(entry.added, status.added);
+            entry.deleted = sum_opts(entry.deleted, status.deleted);
+        }
+    }
+
+    scoped
+}
+
+fn sum_opts(a: Option<u64>, b: Option<u64>) -> Option<u64> {
+    match (a, b) {
+        (Some(x), Some(y)) => Some(x + y),
+        (Some(x), None) => Some(x),
+        (None, Some(y)) => Some(y),
+        (None, None) => None,
+    }
+}
+
 fn render_table(rows: Vec<EntryRow>) {
     let index_width = format!("{}", rows.len().saturating_sub(1)).len().max(1);
     let name_width = rows
         .iter()
-        .map(|row| row.name_plain.len())
+        .map(|row| row.name_with_git_plain.len())
         .max()
         .unwrap_or(4)
         .max("name".len());
@@ -215,8 +430,7 @@ fn render_table(rows: Vec<EntryRow>) {
         .max()
         .unwrap_or(8)
         .max("modified".len());
-
-    let widths = [index_width, name_width, type_width, size_width, modified_width];
+    let widths = vec![index_width, name_width, type_width, size_width, modified_width];
 
     println!("{}", horizontal_border(&widths, BorderKind::Top));
     let header_cells = vec![
@@ -250,7 +464,11 @@ fn render_table(rows: Vec<EntryRow>) {
         let idx_colored = palette::paint(idx_plain.clone(), palette::INDEX);
         let data_cells = vec![
             (idx_plain, idx_colored, Align::Right),
-            (row.name_plain.clone(), row.name_colored.clone(), Align::Left),
+            (
+                row.name_with_git_plain.clone(),
+                row.name_with_git_colored.clone(),
+                Align::Left,
+            ),
             (
                 row.entry_type_plain.clone(),
                 row.entry_type_colored.clone(),
@@ -420,6 +638,41 @@ fn color_name(name: &str, entry_type: EntryType, is_executable: bool, is_hidden:
     }
 }
 
+fn format_git(status: &GitStatus) -> Option<(String, String)> {
+    if !status.dirty && !status.untracked {
+        return Some((
+            "".to_string(),
+            palette::paint("(clean)", palette::GIT_CLEAN),
+        ));
+    }
+
+    let mut plain_parts = Vec::new();
+    let mut color_parts = Vec::new();
+
+    if status.untracked && status.added.is_none() {
+        plain_parts.push("+?".to_string());
+        color_parts.push(palette::paint("+?", palette::GIT_ADDED));
+    }
+
+    if let Some(a) = status.added {
+        plain_parts.push(format!("+{a}"));
+        color_parts.push(palette::paint(format!("+{a}"), palette::GIT_ADDED));
+    }
+    if let Some(d) = status.deleted {
+        plain_parts.push(format!("-{d}"));
+        color_parts.push(palette::paint(format!("-{d}"), palette::GIT_REMOVED));
+    }
+
+    if plain_parts.is_empty() {
+        plain_parts.push("dirty".to_string());
+        color_parts.push(palette::paint("dirty", palette::GIT_DIRTY));
+    }
+
+    let plain = format!("({})", plain_parts.join(" "));
+    let colored = format!("({})", color_parts.join(" "));
+    Some((plain, colored))
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Recency {
     JustNow,
@@ -559,7 +812,8 @@ mod tests {
         let mut rows = vec![
             EntryRow {
                 name_plain: "old_dir".into(),
-                name_colored: String::new(),
+                name_with_git_plain: "old_dir".into(),
+                name_with_git_colored: String::new(),
                 entry_type_plain: "dir".into(),
                 entry_type_colored: String::new(),
                 size_plain: String::new(),
@@ -571,7 +825,8 @@ mod tests {
             },
             EntryRow {
                 name_plain: "new_file".into(),
-                name_colored: String::new(),
+                name_with_git_plain: "new_file".into(),
+                name_with_git_colored: String::new(),
                 entry_type_plain: "file".into(),
                 entry_type_colored: String::new(),
                 size_plain: String::new(),
@@ -583,7 +838,8 @@ mod tests {
             },
             EntryRow {
                 name_plain: "mid_file".into(),
-                name_colored: String::new(),
+                name_with_git_plain: "mid_file".into(),
+                name_with_git_colored: String::new(),
                 entry_type_plain: "file".into(),
                 entry_type_colored: String::new(),
                 size_plain: String::new(),
@@ -606,7 +862,8 @@ mod tests {
         let mut rows = vec![
             EntryRow {
                 name_plain: "a".into(),
-                name_colored: String::new(),
+                name_with_git_plain: "a".into(),
+                name_with_git_colored: String::new(),
                 entry_type_plain: "file".into(),
                 entry_type_colored: String::new(),
                 size_plain: String::new(),
@@ -618,7 +875,8 @@ mod tests {
             },
             EntryRow {
                 name_plain: "b".into(),
-                name_colored: String::new(),
+                name_with_git_plain: "b".into(),
+                name_with_git_colored: String::new(),
                 entry_type_plain: "file".into(),
                 entry_type_colored: String::new(),
                 size_plain: String::new(),
@@ -632,5 +890,35 @@ mod tests {
         sort_rows(&mut rows, true, true);
         assert_eq!(rows[0].name_plain, "a"); // oldest first when reversed
         assert_eq!(rows[1].name_plain, "b");
+    }
+
+    #[test]
+    fn format_git_dirty_with_counts() {
+        let status = GitStatus {
+            added: Some(3),
+            deleted: Some(1),
+            dirty: true,
+            untracked: false,
+        };
+        let (plain, colored) = format_git(&status).expect("has output");
+        assert!(plain.contains("+3"));
+        assert!(plain.contains("-1"));
+        assert!(plain.starts_with('(') && plain.ends_with(')'));
+        assert!(!plain.contains('*'));
+        assert!(colored.contains(palette::GIT_ADDED));
+        assert!(colored.contains(palette::GIT_REMOVED));
+    }
+
+    #[test]
+    fn format_git_clean() {
+        let status = GitStatus {
+            added: None,
+            deleted: None,
+            dirty: false,
+            untracked: false,
+        };
+        let (plain, colored) = format_git(&status).expect("has output");
+        assert_eq!(plain, "");
+        assert!(colored.contains(palette::GIT_CLEAN));
     }
 }

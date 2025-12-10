@@ -5,7 +5,7 @@
 ![Tests](https://img.shields.io/badge/tests-pass-brightgreen)
 
 <p align="center">
-  <img src="screenshot.png" alt="nuls screenshot" width="800">
+  <img src="public/screenshot.png" alt="nuls screenshot" width="800">
 </p>
 
 
@@ -18,6 +18,7 @@ NuShell-inspired `ls` with a colorful, table-based layout: directory/file type t
 - Human-readable sizes (`KB`, `MB`, `GB`, `TB`)
 - Hidden files toggled via `-a/--all`
 - Colored help output for quick scanning
+- Optional git info (`-g`) shown inline after the name, e.g., `main.rs (+15 -2)`
 
 ## Install
 From crates.io:
@@ -43,6 +44,10 @@ nuls -a
 nuls -t
 nuls -tr
 
+# show git status/counts inline
+nuls -g
+nuls -lag
+
 # combine with hidden and long muscle-memory flag
 nuls -la
 ```
@@ -52,6 +57,7 @@ nuls -la
 - `-l, --long` — accepted for familiarity (output is already long-form)
 - `-t, --sort-modified` — sort by modified time (newest first)
 - `-r, --reverse` — reverse sort order
+- `-g, --git` — show git status inline (+added/-deleted, `(clean)` when unchanged)
 - `--color=always/auto/never` — control ANSI color (default: auto; help is forced color)
 
 ## Palette
