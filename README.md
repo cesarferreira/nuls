@@ -8,7 +8,6 @@
   <img src="screenshot.png" alt="nuls screenshot" width="800">
 </p>
 
-> _Screenshot goes here_
 
 NuShell-inspired `ls` with a colorful, table-based layout: directory/file type tagging, human-readable sizes, relative “modified” times with recency-driven colors, and familiar flags.
 
@@ -62,7 +61,6 @@ nuls -la
 
 ## Notes
 - Directories sort before files unless you use `-t` (modified), in which case recency wins.
-- If you previously used rustup’s `rls`, this binary is named `nuls` to avoid collisions. Ensure `~/.cargo/bin` (or your chosen install root) is on `PATH`.
 
 ## Aliases
 Drop one of these in your shell config for muscle-memory:
