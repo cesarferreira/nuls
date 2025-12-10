@@ -2,6 +2,8 @@
 name = "nuls"
 version = "0.1.0"
 edition = "2024"
+description = "NuShell-inspired ls with colorful table output, human-readable sizes, and recency-aware timestamps."
+license = "MIT"
 
 [dependencies]
 clap = { version = "4.5", features = ["derive"] }
