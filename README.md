@@ -1,8 +1,12 @@
 # nuls
 
 ![Crates.io](https://img.shields.io/crates/v/nuls)
-![License](https://img.shields.io/crates/l/nuls)
+![License](https://img.shields.io/badge/license-MIT-blue)
 ![Tests](https://img.shields.io/badge/tests-pass-brightgreen)
+
+<p align="center">
+  <img src="screenshot.png" alt="nuls screenshot" width="800">
+</p>
 
 > _Screenshot goes here_
 
@@ -57,7 +61,7 @@ nuls -la
 - Modified: green → yellow → orange → red → gray as timestamps get older; blue for future
 
 ## Notes
-- Directories are always listed before files.
+- Directories sort before files unless you use `-t` (modified), in which case recency wins.
 - If you previously used rustup’s `rls`, this binary is named `nuls` to avoid collisions. Ensure `~/.cargo/bin` (or your chosen install root) is on `PATH`.
 
 ## Aliases
