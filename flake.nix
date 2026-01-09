@@ -31,6 +31,7 @@
             nativeBuildInputs = with pkgs; [
               pkg-config
             ];
+            # Build inputs for nix-darwin
             buildInputs =
               with pkgs;
               [ ]
@@ -49,7 +50,7 @@
           # Alias to reference it with nuls instead of default
           nuls = self.packages.${system}.default;
 
-          # Execute with `nix run github:cesarferreira/rip`
+          # Execute with `nix run github:MaySeikatsu/nuls`
           apps = {
             default = {
               type = "app";
