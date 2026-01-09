@@ -41,7 +41,7 @@
               ];
             meta = with pkgs.lib; {
               description = "NuShell-inspired ls with colorful table output, human-readable sizes, and recency-aware timestamps.";
-              homepage = "https://github.com/MaySeikatsu/nuls";
+              homepage = "https://github.com/cesarferreira/nuls";
               license = licenses.mit;
               maintainers = [ ];
               mainProgram = "nuls";
@@ -50,7 +50,7 @@
           # Alias to reference it with nuls instead of default
           nuls = self.packages.${system}.default;
 
-          # Execute with `nix run github:MaySeikatsu/nuls`
+          # Execute with `nix run github:cesarferreira/nuls`
           apps = {
             default = {
               type = "app";

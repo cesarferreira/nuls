@@ -35,14 +35,14 @@ cargo install --path . --bin nuls --force
 Nix:
 ```bash
 # Test with nix run:
-nix run github:MaySeikatsu/nuls
+nix run github:cesarferreira/nuls
 ```
 
 ```nix
 # Install via flake:
 inputs = {
   rip = {
-    url = "github:MaySeikatsu/nuls";
+    url = "github:cesarferreira/nuls";
     inputs.nixpkgs.follows = "nixpkgs";
   };
 };
