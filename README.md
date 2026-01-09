@@ -21,6 +21,7 @@ NuShell-inspired `ls` with a colorful, table-based layout: directory/file type t
 - Optional git info (`-g`) shown inline after the name, e.g., `main.rs (+15 -2)`
 
 ## Install
+### Cargo
 From crates.io:
 ```bash
 cargo install nuls
@@ -30,6 +31,39 @@ Building locally:
 ```bash
 cargo install --path . --bin nuls --force
 # optional: cargo install --path . --bin nuls --force --root ~/.local
+```
+
+### Nix
+Test with nix run:
+```bash
+nix run github:MaySeikatsu/nuls
+```
+
+Install via flake:
+```nix
+# In your local flake.nix file
+inputs = {
+  rip = {
+    url = "github:MaySeikatsu/nuls";
+    inputs.nixpkgs.follows = "nixpkgs";
+  };
+};
+
+# Your output packages + nuls
+outputs = {
+#  self,
+#  nixpkgs,
+   nuls,
+#  ...
+};
+
+# In your configuration.nix
+{  inputs, ...}:{
+# Your other configurations 
+  environment.systemPackages = with pkgs; [
+    inputs.nuls.packages.${$system}.default
+  ];
+}
 ```
 
 ## Usage
