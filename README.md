@@ -41,7 +41,7 @@ nix run github:cesarferreira/nuls
 ```nix
 # Install via flake:
 inputs = {
-  rip = {
+  nuls = {
     url = "github:cesarferreira/nuls";
     inputs.nixpkgs.follows = "nixpkgs";
   };
