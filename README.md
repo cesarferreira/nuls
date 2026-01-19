@@ -32,6 +32,38 @@ cargo install --path . --bin nuls --force
 # optional: cargo install --path . --bin nuls --force --root ~/.local
 ```
 
+Nix:
+```bash
+# Test with nix run:
+nix run github:cesarferreira/nuls
+```
+
+```nix
+# Install via flake:
+inputs = {
+  nuls = {
+    url = "github:cesarferreira/nuls";
+    inputs.nixpkgs.follows = "nixpkgs";
+  };
+};
+
+# Your output packages + nuls
+outputs = {
+#  self,
+#  nixpkgs,
+   nuls,
+#  ...
+};
+
+# In your configuration.nix
+{  inputs, ...}:{
+# Your other configurations 
+  environment.systemPackages = with pkgs; [
+    inputs.nuls.packages.${$system}.default
+  ];
+}
+```
+
 ## Usage
 ```bash
 # basic listing
